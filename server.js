@@ -1,23 +1,45 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const https = require('https');
 const dotenv = require('dotenv');
+const https = require('https');
+const axios = require('axios');
 const { twiml: { VoiceResponse } } = require('twilio');
 
 dotenv.config();
-
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 
-const PORT = process.env.PORT || 10000;
-
 const {
     ULTRAVOX_API_KEY,
-    TWILIO_PHONE_NUMBER
+    GEMINI_API_KEY
 } = process.env;
 
-// Paste your full system prompt here
-const SYSTEM_PROMPT = `You are RecruitAI, a professional, polite, and intelligent recruiter assistant from FedEx. You are screening candidates for the Non CDL/L20 position. Your tone should be formal yet human, steady in pace, and attentive to the candidate. Avoid repeating questions unless necessary. Pause after each question to allow the candidate to respond fully.
+const ULTRAVOX_API_URL = 'https://api.ultravox.ai/api/calls';
+const JOB_DESC_URL = 'https://funnl.team/fleetexpinc/noncdll20/Jobdetails';
+
+// 📌 Gemini API call to generate job summary
+async function getGeminiSummaryFromURL(url) {
+    const endpoint = 'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent';
+    const prompt = `Summarize the job description from this link in a recruiter-friendly tone. Keep it informative and don't miss any important details:\n\n${url}`;
+
+    try {
+        const response = await axios.post(`${endpoint}?key=${GEMINI_API_KEY}`, {
+            contents: [{ parts: [{ text: prompt }] }]
+        });
+
+        return response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Job description is currently unavailable.";
+    } catch (err) {
+        console.error("❌ Gemini error:", err.response?.data || err.message);
+        return "Job description is currently unavailable.";
+    }
+}
+
+// 🧠 Build the system prompt dynamically
+async function buildSystemPrompt() {
+    const jobSummary = await getGeminiSummaryFromURL(JOB_DESC_URL);
+
+    return `
+You are RecruitAI, a professional, polite, and intelligent recruiter assistant from FedEx. You are screening candidates for the Non CDL/L20 position. Your tone should be formal yet human, steady in pace, and attentive to the candidate. Avoid repeating questions unless necessary. Pause after each question to allow the candidate to respond fully.
 
 Here is the job summary (use for reference only if asked):
 ${jobSummary}
@@ -107,25 +129,25 @@ H. If FedEx-experienced: Ask about prior accidents, complaints, terminations, or
 - Be empathetic and calm throughout the call.
 - If unsure, pause and confirm with the candidate.
 
-`; // full prompt from your script
+ `;
+}
 
-const ULTRAVOX_CALL_CONFIG = {
-    systemPrompt: SYSTEM_PROMPT,
-    model: 'fixie-ai/ultravox',
-    temperature: 0.3,
-    firstSpeaker: 'FIRST_SPEAKER_CALLER',
-    medium: { twilio: {} },
-    voice: 'dae96454-8512-47d5-9248-f5d8c0916d2e',
-    selectedTools: [
-        {
-            toolId: "aef14f7e-cd13-4ecd-9877-724e4537dd44"
-        }
-    ]
-};
+// 🔄 Create Ultravox call session
+async function createUltravoxCall(systemPrompt) {
+    const config = {
+        systemPrompt,
+        model: 'fixie-ai/ultravox',
+        temperature: 0.3,
+        firstSpeaker: 'FIRST_SPEAKER_CALLER',
+        medium: { twilio: {} },
+        voice: 'dae96454-8512-47d5-9248-f5d8c0916d2e',
+        selectedTools: [
+            { toolId: "aef14f7e-cd13-4ecd-9877-724e4537dd44" }
+        ]
+    };
 
-async function createUltravoxCall() {
     return new Promise((resolve, reject) => {
-        const request = https.request('https://api.ultravox.ai/api/calls', {
+        const req = https.request(ULTRAVOX_API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -133,49 +155,51 @@ async function createUltravoxCall() {
             }
         });
 
-        let data = '';
-
-        request.on('response', (response) => {
-            response.on('data', chunk => (data += chunk));
-            response.on('end', () => {
+        let responseData = '';
+        req.on('response', res => {
+            res.on('data', chunk => (responseData += chunk));
+            res.on('end', () => {
                 try {
-                    const parsed = JSON.parse(data);
+                    const parsed = JSON.parse(responseData);
                     resolve(parsed);
-                } catch (e) {
-                    reject(new Error(`Ultravox response parse error: ${data}`));
+                } catch (err) {
+                    reject(`Parse error: ${responseData}`);
                 }
             });
         });
 
-        request.on('error', reject);
-        request.write(JSON.stringify(ULTRAVOX_CALL_CONFIG));
-        request.end();
+        req.on('error', reject);
+        req.write(JSON.stringify(config));
+        req.end();
     });
 }
 
+// 📞 Twilio will hit this when a call arrives
 app.post('/incoming', async (req, res) => {
     try {
-        const { joinUrl } = await createUltravoxCall();
-        if (!joinUrl) throw new Error("Ultravox did not return a joinUrl.");
+        const systemPrompt = await buildSystemPrompt();
+        const { joinUrl } = await createUltravoxCall(systemPrompt);
 
         const response = new VoiceResponse();
-        response.connect().stream({ url: joinUrl });
+        if (joinUrl) {
+            response.connect().stream({ url: joinUrl });
+        } else {
+            response.say("We are experiencing issues with our assistant. Please try again later.");
+        }
 
-        res.type('text/xml');
-        res.send(response.toString());
-    } catch (error) {
-        console.error('❌ Incoming call error:', error.message);
+        res.type('text/xml').send(response.toString());
+    } catch (err) {
+        console.error("❌ Error during call setup:", err);
         const fallback = new VoiceResponse();
-        fallback.say("We are experiencing issues. Please try again later.");
-        res.type('text/xml');
-        res.send(fallback.toString());
+        fallback.say("We're currently unavailable. Please try again later.");
+        res.type('text/xml').send(fallback.toString());
     }
 });
 
+// Health check
 app.get('/', (req, res) => {
-    res.send('✅ Ultravox Incoming Call Handler is running.');
+    res.send('✅ Incoming call handler is running.');
 });
 
-app.listen(PORT, () => {
-    console.log(`✅ Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
