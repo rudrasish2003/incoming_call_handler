@@ -14,6 +14,11 @@ const {
     GEMINI_API_KEY
 } = process.env;
 
+if (!ULTRAVOX_API_KEY || !GEMINI_API_KEY) {
+    console.error("❌ Missing ULTRAVOX_API_KEY or GEMINI_API_KEY in environment");
+    process.exit(1);
+}
+
 const ULTRAVOX_API_URL = 'https://api.ultravox.ai/api/calls';
 const JOB_DESC_URL = 'https://funnl.team/fleetexpinc/noncdll20/Jobdetails';
 
@@ -27,7 +32,9 @@ async function getGeminiSummaryFromURL(url) {
             contents: [{ parts: [{ text: prompt }] }]
         });
 
-        return response?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Job description is currently unavailable.";
+        const summary = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        console.log("✅ Gemini summary retrieved.");
+        return summary || "Job description is currently unavailable.";
     } catch (err) {
         console.error("❌ Gemini error:", err.response?.data || err.message);
         return "Job description is currently unavailable.";
@@ -39,6 +46,7 @@ async function buildSystemPrompt() {
     const jobSummary = await getGeminiSummaryFromURL(JOB_DESC_URL);
 
     return `
+
 You are RecruitAI, a professional, polite, and intelligent recruiter assistant from FedEx. You are screening candidates for the Non CDL/L20 position. Your tone should be formal yet human, steady in pace, and attentive to the candidate. Avoid repeating questions unless necessary. Pause after each question to allow the candidate to respond fully.
 
 Here is the job summary (use for reference only if asked):
@@ -129,7 +137,7 @@ H. If FedEx-experienced: Ask about prior accidents, complaints, terminations, or
 - Be empathetic and calm throughout the call.
 - If unsure, pause and confirm with the candidate.
 
- `;
+`;
 }
 
 // 🔄 Create Ultravox call session
@@ -161,8 +169,10 @@ async function createUltravoxCall(systemPrompt) {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(responseData);
+                    console.log("✅ Ultravox join URL received.");
                     resolve(parsed);
                 } catch (err) {
+                    console.error("❌ Failed to parse Ultravox response:", responseData);
                     reject(`Parse error: ${responseData}`);
                 }
             });
@@ -177,6 +187,7 @@ async function createUltravoxCall(systemPrompt) {
 // 📞 Twilio will hit this when a call arrives
 app.post('/incoming', async (req, res) => {
     try {
+        console.log("📞 Incoming call from:", req.body.From || "Unknown Caller");
         const systemPrompt = await buildSystemPrompt();
         const { joinUrl } = await createUltravoxCall(systemPrompt);
 
@@ -184,6 +195,7 @@ app.post('/incoming', async (req, res) => {
         if (joinUrl) {
             response.connect().stream({ url: joinUrl });
         } else {
+            console.warn("⚠️ No joinUrl received from Ultravox.");
             response.say("We are experiencing issues with our assistant. Please try again later.");
         }
 
@@ -196,10 +208,11 @@ app.post('/incoming', async (req, res) => {
     }
 });
 
-// Health check
+// ✅ Health check endpoint
 app.get('/', (req, res) => {
     res.send('✅ Incoming call handler is running.');
 });
 
+// 🔥 Start server
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
