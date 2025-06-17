@@ -167,15 +167,16 @@ async function createUltravoxCall(systemPrompt) {
         req.on('response', res => {
             res.on('data', chunk => (responseData += chunk));
             res.on('end', () => {
-                try {
-                    const parsed = JSON.parse(responseData);
-                    console.log("✅ Ultravox join URL received.");
-                    resolve(parsed);
-                } catch (err) {
-                    console.error("❌ Failed to parse Ultravox response:", responseData);
-                    reject(`Parse error: ${responseData}`);
-                }
-            });
+    try {
+        const parsed = JSON.parse(responseData);
+        console.log("📦 Ultravox raw response:", parsed); // 👈 ADD THIS LINE
+        resolve(parsed);
+    } catch (err) {
+        console.error("❌ Failed to parse Ultravox response:", responseData);
+        reject(`Parse error: ${responseData}`);
+    }
+});
+
         });
 
         req.on('error', reject);
