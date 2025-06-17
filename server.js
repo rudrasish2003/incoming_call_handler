@@ -146,7 +146,7 @@ async function createUltravoxCall(systemPrompt) {
         systemPrompt,
         model: 'fixie-ai/ultravox',
         temperature: 0.3,
-        firstSpeaker: 'FIRST_SPEAKER_CALLER',
+        firstSpeaker: 'FIRST_SPEAKER_AGENT',
         medium: { twilio: {} },
         voice: 'dae96454-8512-47d5-9248-f5d8c0916d2e',
         selectedTools: [
